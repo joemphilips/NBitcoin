@@ -419,7 +419,7 @@ namespace NBitcoin
 		public static bool NullSafeEquals<T>(T a, T b) where T : IEquatable<T> =>
 			(a == null && b == null) || ((a != null && b != null) && a.Equals(b));
 
-		public static bool DictEqual<T, U>(Dictionary<T, U> x, Dictionary<T, U> y)
+		public static bool DictEqual<T, U>(Dictionary<T, U> x, Dictionary<T, U> y, Func<U, U, bool> ValueComparator)
 		{
 			if (null == y)
 				return null == x;
@@ -437,8 +437,11 @@ namespace NBitcoin
 
 			// check values are the same
 			foreach (T k in x.Keys)
-				if (!x[k].Equals(y[k]))
-						return false;
+			{
+				var isSame = ValueComparator(y[k], x[k]);
+				if (!isSame)
+					return false;
+			}
 
 			return true;
 		}
