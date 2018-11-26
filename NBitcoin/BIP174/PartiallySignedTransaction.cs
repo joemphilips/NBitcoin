@@ -77,6 +77,9 @@ namespace NBitcoin.BIP174
 		private UnknownKVMap unknown;
 		int sighash_type = 0;
 
+		// Signatures which does not know which pubkey corresponds to him.
+		private List<ECDSASignature> OrphanPartialSigs = new List<ECDSASignature>();
+		private List<PubKey> OrphanPubKeys = new List<PubKey>();
 		public Transaction NonWitnessUtxo
 		{
 			get
@@ -175,6 +178,11 @@ namespace NBitcoin.BIP174
 
 		public PSBTInput()
 		{
+			SetUp();
+		}
+
+		private void SetUp()
+		{
 			hd_keypaths = new HDKeyPathKVMap();
 			partial_sigs = new PartialSigKVMap();
 			unknown = new UnknownKVMap();
@@ -182,24 +190,22 @@ namespace NBitcoin.BIP174
 
 		public PSBTInput(TxIn txin)
 		{
-			new PSBTInput(txin, null, null, null);
-		}
-		public PSBTInput(TxIn txin, Transaction globalTX, TxOut prevOut, uint? index)
-		{
 			if (txin == null)
 			{
 				throw new ArgumentNullException(nameof(txin));
 			}
+			SetUp();
 
-			DeconstructScripts(txin.ScriptSig, txin.WitScript, globalTX, prevOut, index);
+			DeconstructScripts(txin);
 		}
 
-		private void DeconstructScripts(Script ScriptSig, WitScript witScript, Transaction globalTX, TxOut prevOut, uint? index)
+		private void DeconstructScripts(TxIn txin)
 		{
-			var nextScript = prevOut != null ? prevOut.ScriptPubKey : null;
+			var ScriptSig = txin.ScriptSig;
+			var witScript = txin.WitScript;
 
 			// p2pkh
-			var P2PKHIngredients = prevOut != null ? PayToPubkeyHashTemplate.Instance.ExtractScriptSigParameters(ScriptSig) : null;
+			var P2PKHIngredients = PayToPubkeyHashTemplate.Instance.ExtractScriptSigParameters(ScriptSig);
 			if (P2PKHIngredients != null)
 			{
 				if (P2PKHIngredients.TransactionSignature != null) // already finalized
@@ -211,22 +217,20 @@ namespace NBitcoin.BIP174
 			}
 
 			// p2sh
-			var scriptId = nextScript != null ? PayToScriptHashTemplate.Instance.ExtractScriptPubKeyParameters(nextScript) : null;
-			var P2SHIngredients = PayToScriptHashTemplate.Instance.ExtractScriptSigParameters(ScriptSig, scriptId);
+			var P2SHIngredients = PayToScriptHashTemplate.Instance.ExtractScriptSigParameters(ScriptSig);
 			if (P2SHIngredients != null)
 			{
-				redeem_script = nextScript = P2SHIngredients.RedeemScript;
-				// Without information for tx. We can never be sure which sig corresponds to which pubkey.
-				if (globalTX != null && prevOut != null && index != null)
-				{
-					TransactionSignature[] txSigs = P2SHIngredients.GetMultisigSignatures();
-					PubKey[] pubkeys = P2SHIngredients.GetMultisigPubKeys();
-					DeconstructMultisig(txSigs.ToList(), pubkeys.ToList(), globalTX, nextScript, index);
+				redeem_script = P2SHIngredients.RedeemScript;
 
-					if (TryFinalize())
-						return;
-				}
+				TransactionSignature[] txSigs = P2SHIngredients.GetMultisigSignatures();
+				var sigHashes = txSigs.Select(sig => sig.SigHash);
+				if (sigHashes.Any(i => i != sigHashes.First()))
+					throw new InvalidDataException("All signatures in input must have a same sighash type.");
+				sighash_type = txSigs.Select(sig => (int)sig.SigHash).First();
+				this.OrphanPartialSigs = txSigs.Select(txSig => txSig.Signature).ToList();
 
+				PubKey[] pubkeys = P2SHIngredients.GetMultisigPubKeys();
+				this.OrphanPubKeys = pubkeys.ToList();
 				// Do not return here. Since it may be p2sh-nested-witness.
 			}
 
@@ -234,8 +238,6 @@ namespace NBitcoin.BIP174
 			var P2WPKHIngredients = PayToWitPubKeyHashTemplate.Instance.ExtractWitScriptParameters(witScript);
 			if (P2WPKHIngredients != null)
 			{
-				if (prevOut != null)
-					witness_utxo = prevOut;
 				if (P2WPKHIngredients.TransactionSignature != null) // already finalized
 				{
 					if (redeem_script != null) // p2sh-p2wpkh
@@ -250,56 +252,145 @@ namespace NBitcoin.BIP174
 			}
 
 			// p2wsh
-			WitScriptId witScriptId = nextScript != null ? PayToWitScriptHashTemplate.Instance.ExtractScriptPubKeyParameters(nextScript) : null;
-			witness_script = PayToWitScriptHashTemplate.Instance.ExtractWitScriptParameters(witScript, witScriptId);
+			witness_script = PayToWitScriptHashTemplate.Instance.ExtractWitScriptParameters(witScript);
 			if (witness_script != null)
 			{
-				if (prevOut != null)
-					witness_utxo = prevOut;
-				var txSigs = new List<TransactionSignature> { };
-				var pubkeys = new List<PubKey> { };
 				// This may be slow. But the performance does not really matter for PSBT in many case.
 				foreach (byte[] item in witScript.Pushes)
 				{
 					if (TransactionSignature.IsValid(item))
 					{
-						txSigs.Add(new TransactionSignature(item));
+						OrphanPartialSigs.Add(new TransactionSignature(item).Signature);
 					}
 					else if (PubKey.Check(item, true))
 					{
-						pubkeys.Add(new PubKey(item));
+						OrphanPubKeys.Add(new PubKey(item));
 					}
-
-					DeconstructMultisig(txSigs, pubkeys, globalTX, nextScript, index);
-					TryFinalize();
 				}
 
 				return;
 			}
-
-			// we may not throw Exception here. But let's start with the most strict way.
-			throw new InvalidDataException("PSBTInput does not know how to handle this type of TxIn");
 		}
 
-		private void DeconstructMultisig(List<TransactionSignature> txSigs, List<PubKey> pubkeys, Transaction globalTX, Script nextScript, uint? index)
+		internal void AddCoin(ICoin coin)
 		{
-			var sigHashes = txSigs.Select(sig => sig.SigHash);
-			if (sigHashes.Any(i => i != sigHashes.First()))
-				throw new InvalidDataException("All signatures in input must have a same sighash type.");
+			witness_utxo = coin.TxOut;
+		}
 
-			foreach (var txSig in txSigs)
+		/// <summary>
+		/// When first this is instantiated from TxIn, There are no ways to know which sig corresponds to
+		/// which pubkey so it will set sigs to OrphanPartialSigs. PSBT will call this method when it is sure
+		/// That this PSBTInput has witness_utxo, and thus we can match the sig and pubkey.
+		/// </summary>
+		/// <param name="globalTx"></param>
+		internal void MoveOrphansToPartialSigs(Transaction globalTx)
+		{}
+
+
+		// Wny not just use `Transaction.Sign()` ? Because we must pass sighash_type somehow.
+		// TODO: Using Transaction Builder here is ugly. It must be somewhere a method just for creating signature.
+		private void SignTx(ref Transaction tx, Key key, ICoin coin)
+		{
+			TransactionBuilder builder = this.GetConsensusFactory().CreateTransactionBuilder();
+			builder.AddKeys(key)
+				.AddCoins(coin)
+				.SignTransactionInPlace(tx, sighash_type != 0 ? (SigHash)sighash_type : SigHash.All);
+		}
+		internal bool Sign(int index, Transaction tx, Key[] keys)
+		{
+			var outpoint = tx.Inputs[index].PrevOut;
+			var prevout = this.GetOutput(outpoint);
+			if (prevout == null) // no way we can sign without utxo.
+				return false;
+
+			// non_witness_utxo is necessary for non_segwit case.
+			if (
+				PayToPubkeyHashTemplate.Instance.CheckScriptPubKey(prevout.ScriptPubKey) ||
+				(PayToScriptHashTemplate.Instance.CheckScriptPubKey(prevout.ScriptPubKey) && witness_script == null)
+			)
 			{
-				foreach (var pubkey in pubkeys)
+				if (non_witness_utxo == null)
+					return false;
+			}
+
+			bool result = false;
+			var dummyTx = tx.Clone();
+			foreach (var key in keys)
+			{
+				if (OrphanPubKeys.Any(ok => ok.Equals(key.PubKey)) || partial_sigs.ContainsKey(key.PubKey.Hash))
+					continue; // already holds signature.
+				// 1. p2wpkh or p2pkh
+				if (redeem_script == null && witness_script == null)
 				{
-					if (txSig.Check(pubkey, nextScript, tx: globalTX, nIndex: (uint)index))
-						partial_sigs.Add(pubkey.Hash, Tuple.Create(pubkey, txSig.Signature));
+					if (PayToPubkeyHashTemplate.Instance.CheckScriptPubKey(prevout.ScriptPubKey)) // p2pkh
+					{
+						var dummyScript = PayToPubkeyHashTemplate.Instance.GenerateScriptSig(null, key.PubKey);
+						dummyTx.Inputs[index].ScriptSig = dummyScript;
+						var coin = new Coin(outpoint, prevout);
+						SignTx(ref dummyTx, key, coin);
+					}
+					else if(PayToWitPubKeyHashTemplate.Instance.CheckScriptPubKey(prevout.ScriptPubKey)) // p2wpkh
+					{
+						var dummyScript = PayToWitPubKeyHashTemplate.Instance.GenerateWitScript(null, key.PubKey);
+						dummyTx.Inputs[index].WitScript = dummyScript;
+						var coin = new Coin(outpoint, prevout);
+						SignTx(ref dummyTx, key, coin);
+					}
+					else
+					{
+						throw new InvalidDataException($"Can not sign tx input {index}! It has no script but neither it is p2wpkh nor p2pkh");
+					}
+				}
+				// 2. p2wsh
+				else if (witness_script != null)
+				{
+					var coin = new ScriptCoin(outpoint, prevout, witness_script);
+					SignTx(ref dummyTx, key, coin);
+				}
+				// 3. p2sh
+				else if (redeem_script != null)
+				{
+					var coin = new ScriptCoin(outpoint, prevout, redeem_script);
+					SignTx(ref dummyTx, key, coin);
+				}
+
+				var sig = GetRawSigFromTxIn(dummyTx.Inputs[index]);
+				if (sig != null)
+				{
+					result = true;
+					partial_sigs.Add(key.PubKey.Hash, Tuple.Create(key.PubKey, sig));
 				}
 			}
+			return result;
+		}
+
+		private ECDSASignature GetRawSigFromTxIn(TxIn txin)
+		{
+			var item1 = txin.ScriptSig
+				.Clone()
+				.ToOps()
+				.Where(op => op.PushData != null)
+				.Select(op => op.PushData);
+
+			foreach (var i in item1)
+			{
+				if (TransactionSignature.IsValid(i))
+					return new TransactionSignature(i).Signature;
+			}
+
+			var item2 = txin.WitScript.Pushes;
+			foreach (var i in item2)
+			{
+				if (TransactionSignature.IsValid(i))
+					return new TransactionSignature(i).Signature;
+			}
+
+			return null;
 		}
 
 		public bool IsFinalized() => final_script_sig != null || final_script_witness != null;
 
-		public bool TryFinalize() => false;
+		public bool TryFinalize(Transaction tx) => false;
 
 		public void CheckSanity()
 		{
@@ -573,7 +664,8 @@ namespace NBitcoin.BIP174
 
 		public override string ToString()
 		{
-			return JsonConvert.SerializeObject(this);
+			return "Not Implemented";
+			// return JsonConvert.SerializeObject(this);
 		}
 	}
 
@@ -761,7 +853,8 @@ namespace NBitcoin.BIP174
 
 		public override string ToString()
 		{
-			return JsonConvert.SerializeObject(this);
+			return "Not Implemented";
+			// return JsonConvert.SerializeObject(this);
 		}
 
 		public override bool Equals(object obj)
@@ -794,8 +887,8 @@ namespace NBitcoin.BIP174
 		static byte[] PSBT_MAGIC_BYTES = Encoders.ASCII.DecodeData("psbt\xff");
 
 		protected Transaction tx;
-		protected PSBTInputList inputs;
-		protected PSBTOutputList outputs;
+		public PSBTInputList inputs;
+		public PSBTOutputList outputs;
 
 
 		protected Dictionary<byte[], byte[]> unknown;
@@ -873,14 +966,16 @@ namespace NBitcoin.BIP174
 				var coin = coins.FirstOrDefault(c => c.Outpoint == txin.PrevOut);
 				if (coin != null)
 				{
-					this.inputs.Add(new PSBTInput(txin, tx, coin.TxOut, (uint)i));
+					this.inputs.Add(new PSBTInput(txin));
+					this.inputs[i].AddCoin(coin);
+					this.inputs[i].MoveOrphansToPartialSigs(tx);
+					this.inputs[i].TryFinalize(tx);
 				}
 				else
 				{
 					this.inputs.Add(new PSBTInput(tx.Inputs[i]));
 				}
 			}
-
 		}
 
 		private void SetUpInput()
@@ -909,6 +1004,106 @@ namespace NBitcoin.BIP174
 			inputs = new PSBTInputList(tx);
 			outputs = new PSBTOutputList(tx);
 			unknown = new UnknownKVMap();
+		}
+
+		public static PSBT FromTransaction(Transaction tx) => new PSBT(tx);
+
+		public PSBT AddCoins(params ICoin[] coins)
+		{
+			for (var i = 0; i < tx.Inputs.Count; i++)
+			{
+				var txin = tx.Inputs[i];
+				var coin = coins.FirstOrDefault(c => c.Outpoint == txin.PrevOut);
+				if (coin != null)
+				{
+					this.inputs[i].AddCoin(coin);
+					this.inputs[i].MoveOrphansToPartialSigs(tx);
+				}
+			}
+
+			return this;
+		}
+
+		public PSBT AddTransactions(params Transaction[] txs)
+		{
+			for (var i = 0; i < tx.Inputs.Count; i++)
+			{
+				var txin = tx.Inputs[i];
+				var nonWitnessUtxo = txs.FirstOrDefault(t => t.GetHash() == txin.PrevOut.Hash);
+				if (nonWitnessUtxo != null)
+				{
+					this.inputs[i].NonWitnessUtxo = nonWitnessUtxo;
+					this.inputs[i].MoveOrphansToPartialSigs(tx);
+				}
+			}
+
+			return this;
+		}
+
+		public PSBT Finalize(out bool result)
+		{
+			result = true;
+			foreach (var psbtin in this.inputs)
+			{
+				result &= psbtin.TryFinalize(tx);
+			}
+
+			return this;
+		}
+
+		public PSBT TrySignAll(params Key[] keys)
+		{
+			for (var i = 0; i < inputs.Count; i++)
+			{
+				bool _;
+				Sign(i, keys, out _);
+			}
+
+			return this;
+		}
+
+		public PSBT Sign(int index, Key[] keys ,out bool success)
+		{
+			try
+			{
+				success = this.inputs[index].Sign(index, tx, keys);
+			} catch (InvalidDataException)
+			{
+				success = false;
+			}
+			return this;
+		}
+
+		public Transaction ExtractTX()
+		{
+			if (!this.CanExtractTX())
+				throw new InvalidOperationException("PSBTInputs are not all finalized!");
+
+			for (var i = 0; i < tx.Inputs.Count; i++)
+			{
+				tx.Inputs[i].ScriptSig = inputs[i].FinalScriptSig;
+				tx.Inputs[i].WitScript = inputs[i].FinalScriptWitness;
+			}
+
+			return tx;
+		}
+		public bool CanExtractTX() => IsAllFinalized();
+
+		public bool IsAllFinalized() => this.inputs.All(i => i.IsFinalized());
+
+		public PSBT AddPathTo(PubKey key, KeyPath path, int index, bool ToInput = true)
+		{
+			// TODO: Convert path object to storable type.
+			if (ToInput)
+			{
+				// inputs[index].HDKeyPaths.Add(key, path);
+			}
+			else
+			{
+				// outputs[index].HDKeyPaths.Add(key, path);
+			}
+
+			return this;
 		}
 
 		public void CheckSanity()
@@ -1059,7 +1254,8 @@ namespace NBitcoin.BIP174
 
 		public override string ToString()
 		{
-			return JsonConvert.SerializeObject(this);
+			return "Not Implemented";
+			// return JsonConvert.SerializeObject(this);
 		}
 
 		public virtual ConsensusFactory GetConsensusFactory() => Bitcoin.Instance.Mainnet.Consensus.ConsensusFactory;
