@@ -577,7 +577,7 @@ namespace NBitcoin.BIP174
 			return Tuple.Create(true, "");
 		}
 
-		public TxOut GetOutput(OutPoint prevout)
+		internal TxOut GetOutput(OutPoint prevout)
 		{
 			if (witness_utxo != null)
 				return witness_utxo;
