@@ -1169,22 +1169,16 @@ namespace NBitcoin.BIP174
 		{
 			for (var i = 0; i < inputs.Count; i++)
 			{
-				bool _;
-				Sign(i, keys, out _);
+				Sign(i, keys);
 			}
 
 			return this;
 		}
+		public PSBT Sign(int index, Key[] keys) => Sign(index, keys, out bool _);
 
 		public PSBT Sign(int index, Key[] keys ,out bool success)
 		{
-			try
-			{
-				success = this.inputs[index].Sign(index, tx, keys);
-			} catch (InvalidDataException)
-			{
-				success = false;
-			}
+			success = this.inputs[index].Sign(index, tx, keys);
 			return this;
 		}
 
@@ -1234,9 +1228,10 @@ namespace NBitcoin.BIP174
 			for (var i = 0; i < this.tx.Inputs.Count(); i++)
 			{
 				var psbtin = this.inputs[i];
+				var txin = tx.Inputs[i];
 				if (psbtin.WitnessUtxo != null && psbtin.NonWitnessUtxo != null)
 				{
-					var prevOutIndex = this.tx.Inputs[i].PrevOut.N;
+					var prevOutIndex = txin.PrevOut.N;
 					if (!psbtin.NonWitnessUtxo.Outputs[prevOutIndex].Equals(psbtin.NonWitnessUtxo))
 						return Tuple.Create(false, "malformed PSBT! witness_utxo and non_witness_utxo is different");
 				}
@@ -1244,7 +1239,7 @@ namespace NBitcoin.BIP174
 				if (psbtin.NonWitnessUtxo != null)
 				{
 					var prevOutTxId = psbtin.NonWitnessUtxo.GetHash();
-					if (this.tx.Inputs[i].PrevOut.Hash != prevOutTxId)
+					if (txin.PrevOut.Hash != prevOutTxId)
 						return Tuple.Create(false, "malformed PSBT! wrong non_witness_utxo.");
 				}
 			}
