@@ -492,6 +492,18 @@ namespace NBitcoin
 			}
 			return hash;
 		}
+
+		public int CompareTo(object other)
+			=> CompareTo(other as uint256);
+
+		public int CompareTo(uint256 other)
+		{
+			if (other is null || this > other)
+				return -1;
+			if (this == other)
+				return 0;
+			return 1;
+		}
 	}
 	public sealed class uint160 : IComparable<uint160>, IEquatable<uint160>, IComparable
 	{
@@ -850,6 +862,17 @@ namespace NBitcoin
 				hash = hash * 31 + (int)pn4;
 			}
 			return hash;
+		}
+		public int CompareTo(object other)
+			=> CompareTo(other as uint160);
+
+		public int CompareTo(uint160 other)
+		{
+			if (other is null || this > other)
+				return -1;
+			if (this == other)
+				return 0;
+			return 1;
 		}
 	}
 }
