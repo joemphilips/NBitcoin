@@ -9,7 +9,7 @@ using System.Linq;
 
 namespace NBitcoin
 {
-	public class OutPoint : IBitcoinSerializable
+	public class OutPoint : IBitcoinSerializable, IComparable, IComparable<OutPoint>, IEquatable<OutPoint>
 	{
 		public bool IsNull
 		{
@@ -180,13 +180,6 @@ namespace NBitcoin
 		{
 			return !(a == b);
 		}
-		public override bool Equals(object obj)
-		{
-			OutPoint item = obj as OutPoint;
-			if (object.ReferenceEquals(null, item))
-				return false;
-			return item == this;
-		}
 
 		public override int GetHashCode()
 		{
@@ -200,6 +193,28 @@ namespace NBitcoin
 		{
 			return $"{Hash}-{N}";
 		}
+
+		public int CompareTo(object obj)
+			=> CompareTo(obj as OutPoint);
+		public int CompareTo(OutPoint other)
+		{
+			if (other is null || other < this)
+				return -1;
+			if (this == other)
+				return 0;
+			return 1;
+		}
+
+		public override bool Equals(object obj)
+			=> Equals(obj as OutPoint);
+
+		public bool Equals(OutPoint other)
+		{
+			if (other is null)
+				return false;
+			return other == this;
+ 		}
+
 	}
 
 
