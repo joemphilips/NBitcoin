@@ -218,7 +218,7 @@ namespace NBitcoin
 	}
 
 
-	public class TxIn : IBitcoinSerializable
+	public class TxIn : IBitcoinSerializable, IEquatable<TxIn>
 	{
 		public TxIn()
 		{
@@ -349,6 +349,29 @@ namespace NBitcoin
 			txin.ScriptSig = new Script(Op.GetPushOp(height)) + OpcodeType.OP_0;
 			return txin;
 		}
+
+		#region IEquatable members
+
+		public bool Equals(TxIn other)
+			=> this == other;
+		public static bool operator ==(TxIn a, TxIn b)
+		{
+			if (Object.ReferenceEquals(a, null))
+			{
+				return Object.ReferenceEquals(b, null);
+			}
+			if (Object.ReferenceEquals(b, null))
+			{
+				return false;
+			}
+			return (a.prevout == b.prevout && a.Sequence == b.Sequence && a.ScriptSig.Equals(b.ScriptSig) && a.WitScript.Equals(b.WitScript));
+		}
+
+		public static bool operator !=(TxIn a, TxIn b)
+		{
+			return !(a == b);
+		}
+		# endregion
 	}
 
 	public class TxOutCompressor : IBitcoinSerializable
