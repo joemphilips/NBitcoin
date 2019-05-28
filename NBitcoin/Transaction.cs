@@ -351,6 +351,8 @@ namespace NBitcoin
 		}
 
 		#region IEquatable members
+		public override bool Equals(object other)
+			=> Equals(other as TxIn);
 
 		public bool Equals(TxIn other)
 			=> this == other;
@@ -370,6 +372,16 @@ namespace NBitcoin
 		public static bool operator !=(TxIn a, TxIn b)
 		{
 			return !(a == b);
+		}
+
+		public override int GetHashCode()
+		{
+			var num = 0;
+			num = -1640531527 + prevout.GetHashCode() + ((num << 6) + (num >> 2));
+			num = -1640531527 + nSequence.GetHashCode() + ((num << 6) + (num >> 2));
+			num = -1640531527 + ScriptSig.GetHashCode() + ((num << 6) + (num >> 2));
+			num = -1640531527 + WitScript.GetHashCode() + ((num << 6) + (num >> 2));
+			return num;
 		}
 		# endregion
 	}
