@@ -198,7 +198,7 @@ namespace NBitcoin
 			=> CompareTo(obj as OutPoint);
 		public int CompareTo(OutPoint other)
 		{
-			if (other is null || other < this)
+			if (other is null || this < other)
 				return -1;
 			if (this == other)
 				return 0;
