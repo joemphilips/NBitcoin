@@ -522,6 +522,22 @@ namespace NBitcoin
 			return new ECKey(pubkey.GetEncoded(true), false).GetPubKey(true);
 		}
 
+		/// <summary>
+		/// Perform Elliptic curve Addition
+		/// </summary>
+		/// <param name="pk"></param>
+		/// <returns></returns>
+		public PubKey Add(PubKey pk)
+		{
+			var pub1 = _ECKey.GetPublicKeyParameters();
+			var pub2 = pk._ECKey.GetPublicKeyParameters();
+			var q = pub1.Q.Add(pub2.Q).Normalize();
+			if (q.IsInfinity)
+				throw new InvalidOperationException("result of addition has become ");
+			var newPubKey = ECKey.Secp256k1.Curve.CreatePoint(q.XCoord.ToBigInteger(), q.YCoord.ToBigInteger());
+			return new ECKey(newPubKey.Normalize().GetEncoded(true), false).GetPubKey(true);
+		}
+
 		public string Encrypt(string message)
 		{
 			if (string.IsNullOrEmpty(message))
