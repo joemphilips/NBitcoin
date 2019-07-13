@@ -32,5 +32,20 @@ namespace NBitcoin.Tests.PropertyTest
 			return keys.Distinct().Count() == keys.Count();
 		}
 
+		[Property(MaxTest=1000)]
+		[Trait("PropertyTest", "Verification")]
+		public void CanMultiplyByUInt256(Key k, uint256 v)
+		{
+			k.Multiply(v);
+		}
+
+		[Property(MaxTest=1000)]
+		[Trait("PropertyTest", "Verification")]
+		public void CanInstansiateFromUInt256(uint256 v)
+		{
+			new Key(v.ToBytes());
+		}
+
+
 	}
 }

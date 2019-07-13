@@ -252,6 +252,19 @@ namespace NBitcoin
 			return new BitcoinSecret(this, network);
 		}
 
+		public Key Multiply(uint256 value)
+		{
+			return Multiply(new Key(value.ToBytes()));
+		}
+
+		public Key Multiply(Key value)
+		{
+			var devisor = new BouncyCastle.Math.EC.Custom.Sec.SecP256K1FieldElement(value._ECKey.PrivateKey.D);
+			var dTmp = new BouncyCastle.Math.EC.Custom.Sec.SecP256K1FieldElement(this._ECKey.PrivateKey.D);
+			var newD = dTmp.Divide(devisor);
+			return new Key(newD.GetEncoded());
+		}
+
 		/// <summary>
 		/// Same than GetBitcoinSecret
 		/// </summary>
